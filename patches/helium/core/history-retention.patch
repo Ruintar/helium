@@ -1,0 +1,242 @@
+Index: src/chrome/browser/history/history_service_factory.cc
+===================================================================
+--- src.orig/chrome/browser/history/history_service_factory.cc
++++ src/chrome/browser/history/history_service_factory.cc
+@@ -29,6 +29,8 @@ std::unique_ptr<KeyedService> BuildHisto
+           context->GetPath(), chrome::GetChannel()))) {
+     return nullptr;
+   }
++  history_service->InitHistoryRetentionPref(
++      Profile::FromBrowserContext(context)->GetPrefs());
+   return history_service;
+ }
+ 
+Index: src/chrome/browser/profiles/profile_impl.cc
+===================================================================
+--- src.orig/chrome/browser/profiles/profile_impl.cc
++++ src/chrome/browser/profiles/profile_impl.cc
+@@ -397,6 +397,7 @@ std::unique_ptr<Profile> Profile::Create
+ void ProfileImpl::RegisterProfilePrefs(
+     user_prefs::PrefRegistrySyncable* registry) {
+   registry->RegisterBooleanPref(prefs::kSavingBrowserHistoryDisabled, false);
++  registry->RegisterIntegerPref(prefs::kExpireDaysThreshold, 90);
+   registry->RegisterBooleanPref(prefs::kAllowDeletingBrowserHistory, true);
+   registry->RegisterBooleanPref(policy::policy_prefs::kForceGoogleSafeSearch,
+                                 false);
+Index: src/components/history/core/browser/expire_history_backend.cc
+===================================================================
+--- src.orig/components/history/core/browser/expire_history_backend.cc
++++ src/components/history/core/browser/expire_history_backend.cc
+@@ -344,6 +344,12 @@ void ExpireHistoryBackend::ClearOldOnDem
+ 
+   last_on_demand_expiration_threshold_ = expiration_threshold;
+ 
++  if (expiration_threshold_.is_max()) {
++    work_queue_ = {};
++    weak_factory_.InvalidateWeakPtrs();
++    return;
++  }
++
+   std::map<favicon_base::FaviconID, favicon::IconMappingsForExpiry>
+       icon_mappings = favicon_db_->GetOldOnDemandFavicons(expiration_threshold);
+   DeleteEffects effects;
+@@ -407,6 +413,21 @@ void ExpireHistoryBackend::StartExpiring
+   ScheduleExpire();
+ }
+ 
++void ExpireHistoryBackend::UpdateExpirationThreshold(
++    base::TimeDelta threshold) {
++  if (threshold.is_max()) {
++    expiration_threshold_ = threshold;
++    work_queue_ = {};
++    weak_factory_.InvalidateWeakPtrs();
++    return;
++  }
++  if (expiration_threshold_.is_max()) {
++    StartExpiringOldStuff(threshold);
++    return;
++  }
++  expiration_threshold_ = threshold;
++}
++
+ void ExpireHistoryBackend::DeleteFaviconsIfPossible(DeleteEffects* effects) {
+   if (!favicon_db_)
+     return;
+Index: src/components/history/core/browser/expire_history_backend.h
+===================================================================
+--- src.orig/components/history/core/browser/expire_history_backend.h
++++ src/components/history/core/browser/expire_history_backend.h
+@@ -82,6 +82,9 @@ class ExpireHistoryBackend {
+   // will continue until the object is deleted.
+   void StartExpiringOldStuff(base::TimeDelta expiration_threshold);
+ 
++  // Updates the expiration threshold and adjusts the expiration loop.
++  void UpdateExpirationThreshold(base::TimeDelta threshold);
++
+   // Deletes everything associated with a URL until `end_time`.
+   void DeleteURL(const GURL& url, base::Time end_time);
+ 
+Index: src/components/history/core/browser/history_backend.cc
+===================================================================
+--- src.orig/components/history/core/browser/history_backend.cc
++++ src/components/history/core/browser/history_backend.cc
+@@ -1387,6 +1387,10 @@ void HistoryBackend::InitImpl(
+     expirer_.StartExpiringOldStuff(base::Days(kExpireDaysThreshold));
+ }
+ 
++void HistoryBackend::UpdateExpirationThreshold(base::TimeDelta threshold) {
++  expirer_.UpdateExpirationThreshold(threshold);
++}
++
+ void HistoryBackend::CloseAllDatabases() {
+   // Reset to avoid dangling pointers to the database.
+   history_sync_bridge_.reset();
+Index: src/components/history/core/browser/history_backend.h
+===================================================================
+--- src.orig/components/history/core/browser/history_backend.h
++++ src/components/history/core/browser/history_backend.h
+@@ -234,6 +234,9 @@ class HistoryBackend : public base::RefC
+   void Init(bool force_fail,
+             const HistoryDatabaseParams& history_database_params);
+ 
++  // Updates the history expiration threshold.
++  void UpdateExpirationThreshold(base::TimeDelta threshold);
++
+   // Notification that the history system is shutting down. This will break
+   // the refs owned by the delegate and any pending transaction, so it will
+   // actually be deleted.
+Index: src/components/history/core/browser/history_service.cc
+===================================================================
+--- src.orig/components/history/core/browser/history_service.cc
++++ src/components/history/core/browser/history_service.cc
+@@ -52,6 +52,8 @@
+ #include "components/history/core/browser/in_memory_history_backend.h"
+ #include "components/history/core/browser/keyword_search_term.h"
+ #include "components/history/core/browser/sync/delete_directive_handler.h"
++#include "components/history/core/common/pref_names.h"
++#include "components/prefs/pref_service.h"
+ #include "components/history/core/browser/visit_database.h"
+ #include "components/history/core/browser/visit_delegate.h"
+ #include "components/history/core/browser/web_history_service.h"
+@@ -511,6 +513,37 @@ base::CancelableTaskTracker::TaskId Hist
+   return task_id;
+ }
+ 
++namespace {
++
++constexpr int kDefaultHistoryRetentionDays = 90;
++constexpr int kKeepHistoryForever = -1;
++
++base::TimeDelta HistoryRetentionDaysToTimeDelta(int days) {
++  if (days == kKeepHistoryForever) {
++    return base::TimeDelta::Max();
++  }
++  return base::Days(days > 0 ? days : kDefaultHistoryRetentionDays);
++}
++
++}  // namespace
++
++void HistoryService::InitHistoryRetentionPref(PrefService* prefs) {
++  DCHECK(prefs);
++  history_retention_days_.Init(
++      prefs::kExpireDaysThreshold, prefs,
++      base::BindRepeating(&HistoryService::OnHistoryRetentionDaysChanged,
++                          base::Unretained(this)));
++  OnHistoryRetentionDaysChanged();
++}
++
++void HistoryService::OnHistoryRetentionDaysChanged() {
++  const base::TimeDelta threshold =
++      HistoryRetentionDaysToTimeDelta(history_retention_days_.GetValue());
++  backend_task_runner_->PostTask(
++      FROM_HERE, base::BindOnce(&HistoryBackend::UpdateExpirationThreshold,
++                                history_backend_, threshold));
++}
++
+ void HistoryService::ScheduleDBTaskForUI(
+     base::OnceCallback<void(HistoryBackend*, URLDatabase*)> callback) {
+   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+@@ -1471,6 +1504,8 @@ void HistoryService::Cleanup() {
+ 
+   device_info_tracker_observation_.Reset();
+   device_info_tracker_ = nullptr;
++
++  history_retention_days_.Destroy();
+ }
+ 
+ bool HistoryService::Init(
+Index: src/components/history/core/browser/history_service.h
+===================================================================
+--- src.orig/components/history/core/browser/history_service.h
++++ src/components/history/core/browser/history_service.h
+@@ -40,6 +40,7 @@
+ #include "components/history/core/browser/history_types.h"
+ #include "components/history/core/browser/keyword_id.h"
+ #include "components/history/core/browser/url_row.h"
++#include "components/prefs/pref_member.h"
+ #include "components/keyed_service/core/keyed_service.h"
+ #include "components/sync/service/sync_service.h"
+ #include "components/sync_device_info/device_info.h"
+@@ -56,6 +57,7 @@ class SkBitmap;
+ namespace favicon {
+ class FaviconServiceImpl;
+ }
++class PrefService;
+ 
+ namespace syncer {
+ class DataTypeControllerDelegate;
+@@ -116,6 +118,9 @@ class HistoryService : public KeyedServi
+     return Init(false, history_database_params);
+   }
+ 
++  // Initializes the history retention pref observer.
++  void InitHistoryRetentionPref(PrefService* prefs);
++
+   // Returns the directory containing the History databases.
+   const base::FilePath& history_dir() const { return history_dir_; }
+ 
+@@ -863,6 +868,7 @@ class HistoryService : public KeyedServi
+   // should be impossible for anybody else to call the service, even if it is
+   // still in memory (pending requests may be holding a reference to us).
+   void Cleanup();
++  void OnHistoryRetentionDaysChanged();
+ 
+   // Low-level Init().  Same as the public version, but adds a `no_db` parameter
+   // that is only set by unittests which causes the backend to not init its DB.
+@@ -1188,6 +1194,9 @@ class HistoryService : public KeyedServi
+   raw_ptr<syncer::LocalDeviceInfoProvider> local_device_info_provider_ =
+       nullptr;
+ 
++  IntegerPrefMember history_retention_days_;
++
++
+   // All vended weak pointers are invalidated in Cleanup().
+   base::WeakPtrFactory<HistoryService> weak_ptr_factory_{this};
+ };
+Index: src/components/history/core/common/pref_names.cc
+===================================================================
+--- src.orig/components/history/core/common/pref_names.cc
++++ src/components/history/core/common/pref_names.cc
+@@ -9,6 +9,10 @@ namespace prefs {
+ // Boolean controlling whether history saving is disabled.
+ const char kSavingBrowserHistoryDisabled[] = "history.saving_disabled";
+ 
++// The number of days old a history entry can be before it is considered "old"
++// and is deleted. -1 keeps history forever.
++const char kExpireDaysThreshold[] = "history.expire_days_threshold";
++
+ // Boolean controlling whether deleting browsing and download history is
+ // permitted.
+ const char kAllowDeletingBrowserHistory[] = "history.deleting_enabled";
+Index: src/components/history/core/common/pref_names.h
+===================================================================
+--- src.orig/components/history/core/common/pref_names.h
++++ src/components/history/core/common/pref_names.h
+@@ -12,6 +12,7 @@
+ namespace prefs {
+ 
+ extern const char kSavingBrowserHistoryDisabled[];
++extern const char kExpireDaysThreshold[];
+ extern const char kAllowDeletingBrowserHistory[];
+ 
+ }  // namespace prefs

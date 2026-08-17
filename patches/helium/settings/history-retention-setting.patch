@@ -1,0 +1,102 @@
+Index: src/chrome/browser/resources/settings/privacy_page/privacy_page.html
+===================================================================
+--- src.orig/chrome/browser/resources/settings/privacy_page/privacy_page.html
++++ src/chrome/browser/resources/settings/privacy_page/privacy_page.html
+@@ -16,6 +16,15 @@
+         label="$i18n{clearBrowsingData}"
+         sub-label="$i18n{clearBrowsingDataDescription}"
+         on-click="onClearBrowsingDataClick_"></cr-link-row>
++    <div class="cr-row">
++      <div class="flex cr-padded-text" aria-hidden="true">
++        $i18n{historyRetentionLabel}
++      </div>
++      <settings-dropdown-menu id="historyRetention"
++          pref-key="history.expire_days_threshold"
++          menu-options="[[historyRetentionOptions_]]">
++      </settings-dropdown-menu>
++    </div>
+     <template is="dom-if" if="[[heliumNoiseAvailable_]]">
+       <cr-link-row id="noiseLinkRow"
+           start-icon="settings20:shield"
+@@ -53,6 +62,15 @@
+         sub-label="$i18n{securityPageDescription}"
+         on-click="onSecurityPageClick_"
+         role-description="$i18n{subpageArrowRoleDescription}"></cr-link-row>
++    <div class="cr-row">
++      <div class="flex cr-padded-text" aria-hidden="true">
++        $i18n{historyRetentionLabel}
++      </div>
++      <settings-dropdown-menu id="historyRetention"
++          pref-key="history.expire_days_threshold"
++          menu-options="[[historyRetentionOptions_]]">
++      </settings-dropdown-menu>
++    </div>
+     <cr-link-row id="siteSettingsLinkRow" start-icon="privacy:page-info"
+         class="hr" label="$i18n{siteSettings}"
+         sub-label="$i18n{siteSettingsSublabel}"
+Index: src/chrome/browser/resources/settings/privacy_page/privacy_page.ts
+===================================================================
+--- src.orig/chrome/browser/resources/settings/privacy_page/privacy_page.ts
++++ src/chrome/browser/resources/settings/privacy_page/privacy_page.ts
+@@ -14,6 +14,7 @@ import 'chrome://resources/cr_elements/c
+ import 'chrome://resources/cr_elements/cr_toast/cr_toast.js';
+ import '../icons.html.js';
+ import '../privacy_icons.html.js';
++import '../controls/settings_dropdown_menu.js';
+ import '../settings_page/settings_section.js';
+ import '../settings_shared.css.js';
+ import './privacy_guide/privacy_guide_dialog.js';
+@@ -81,6 +82,23 @@ export class SettingsPrivacyPageElement
+         value: () => loadTimeData.getBoolean('isAdPrivacyAvailable'),
+       },
+ 
++      historyRetentionOptions_: {
++        readOnly: true,
++        type: Array,
++        value() {
++          return [
++            {value: 1, name: loadTimeData.getString('historyRetentionOneDay')},
++            {value: 7, name: loadTimeData.getString('historyRetentionOneWeek')},
++            {value: 30, name: loadTimeData.getString('historyRetentionOneMonth')},
++            {value: 90, name: loadTimeData.getString('historyRetentionThreeMonths')},
++            {value: 180, name: loadTimeData.getString('historyRetentionSixMonths')},
++            {value: 365, name: loadTimeData.getString('historyRetentionOneYear')},
++            {value: 1825, name: loadTimeData.getString('historyRetentionFiveYears')},
++            {value: -1, name: loadTimeData.getString('historyRetentionForever')},
++          ];
++        },
++      },
++
+       heliumNoiseAvailable_: {
+         type: Boolean,
+         value: () => loadTimeData.getBoolean('heliumNoiseAvailable'),
+@@ -105,6 +123,7 @@ export class SettingsPrivacyPageElement
+   declare private isPrivacySandboxRestricted_: boolean;
+   declare private isPrivacySandboxRestrictedNoticeEnabled_: boolean;
+   declare private isAdPrivacyAvailable_: boolean;
++  declare private historyRetentionOptions_: object[];
+   declare private heliumNoiseAvailable_: boolean;
+   declare private dbdDeletionConfirmationToastLabel_: string;
+   declare private shouldShowDbdDeletionConfirmationToast_: boolean;
+Index: src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+===================================================================
+--- src.orig/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
++++ src/chrome/browser/ui/webui/settings/settings_localized_strings_provider.cc
+@@ -2530,6 +2530,17 @@ void AddPrivacyStrings(content::WebUIDat
+       {"clearedData", IDS_SETTINGS_CLEARED_DATA},
+       {"clearBrowsingData", IDS_SETTINGS_CLEAR_BROWSING_DATA},
+       {"clearBrowsingDataDescription", IDS_SETTINGS_CLEAR_DATA_DESCRIPTION},
++
++      {"historyRetentionLabel", IDS_SETTINGS_HISTORY_RETENTION_LABEL},
++      {"historyRetentionSubLabel", IDS_SETTINGS_HISTORY_RETENTION_SUB_LABEL},
++      {"historyRetentionOneDay", IDS_SETTINGS_HISTORY_RETENTION_ONE_DAY},
++      {"historyRetentionOneWeek", IDS_SETTINGS_HISTORY_RETENTION_ONE_WEEK},
++      {"historyRetentionOneMonth", IDS_SETTINGS_HISTORY_RETENTION_ONE_MONTH},
++      {"historyRetentionThreeMonths", IDS_SETTINGS_HISTORY_RETENTION_THREE_MONTHS},
++      {"historyRetentionSixMonths", IDS_SETTINGS_HISTORY_RETENTION_SIX_MONTHS},
++      {"historyRetentionOneYear", IDS_SETTINGS_HISTORY_RETENTION_ONE_YEAR},
++      {"historyRetentionFiveYears", IDS_SETTINGS_HISTORY_RETENTION_FIVE_YEARS},
++      {"historyRetentionForever", IDS_SETTINGS_HISTORY_RETENTION_FOREVER},
+       {"titleAndCount", IDS_SETTINGS_TITLE_AND_COUNT},
+       {"safeBrowsingEnableExtendedReportingDesc",
+        IDS_SETTINGS_SAFEBROWSING_ENABLE_REPORTING_DESC},

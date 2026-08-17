@@ -71,7 +71,6 @@ ungoogled-chromium/disable-dial-repeating-discovery.patch
 ungoogled-chromium/remove-uneeded-ui.patch
 ungoogled-chromium/add-flag-to-close-window-with-last-tab.patch
 ungoogled-chromium/add-flag-to-convert-popups-to-tabs.patch
-ungoogled-chromium/add-flag-to-disable-local-history-expiration.patch
 ungoogled-chromium/prepopulated-search-engines.patch
 ungoogled-chromium/add-flag-to-clear-data-on-exit.patch
 ungoogled-chromium/add-flag-for-close-confirmation.patch
@@ -218,6 +217,7 @@ helium/core/crash-reporting-prefs.patch
 helium/core/disable-omnibox-webui.patch
 helium/core/rbe-nativelink-config.patch
 
+helium/core/history-retention.patch
 helium/settings/settings-page-icons.patch
 helium/settings/move-search-suggest.patch
 helium/settings/remove-autofill.patch
@@ -243,6 +243,7 @@ helium/settings/crash-reporting-settings.patch
 helium/settings/helium-noise-settings.patch
 helium/settings/network-and-security-page.patch
 
+helium/settings/history-retention-setting.patch
 helium/hop/setup.patch
 helium/hop/disable-password-manager.patch
 
